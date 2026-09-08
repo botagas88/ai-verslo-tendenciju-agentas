@@ -1,0 +1,37 @@
+name: Kasdienė verslo ataskaita
+
+on:
+  schedule:
+    # Kasdien 06:00 UTC (09:00 Lietuvos laiku žiemą, 09:00/08:00 vasarą pagal UTC)
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Atsisiųsti kodą
+        uses: actions/checkout@v4
+
+      - name: Įdiegti Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sugeneruoti ataskaitą
+        run: python main.py
+
+      - name: Įrašyti ataskaitą į repozitoriją
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add business_ideas.txt
+          if git diff --staged --quiet; then
+            echo "Ataskaita nepasikeitė – commit nereikalingas."
+          else
+            git commit -m "Atnaujinta verslo idėjų ataskaita"
+            git push
+          fi
