@@ -1,142 +1,288 @@
-"""AI Verslo Tendencijų Agentas – imituoja tendencijų rinkimą ir sugeneruoja ataskaitą."""
+"""AI Verslo Tendencijų Agentas – renka naujienas, analizuoja su AI ir siunčia ataskaitą."""
 
+from __future__ import annotations
+
+import os
+import re
+import smtplib
 import sys
 from datetime import datetime
+from email.message import EmailMessage
 from pathlib import Path
-from random import Random
+from urllib.request import Request, urlopen
+
+from dotenv import load_dotenv
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 OUTPUT_FILE = Path(__file__).resolve().parent / "business_ideas.txt"
+USER_AGENT = "AIVersloTendencijuAgentas/1.0 (+https://github.com/botagas88/ai-verslo-tendenciju-agentas)"
+NEWS_LIMIT = 12
 
-TRENDS = [
-    {
-        "pavadinimas": "Dirbtinis intelektas mažame versle",
-        "aprasymas": "Įmonės vis dažniau naudoja AI klientų aptarnavimui, turinio kūrimui ir procesų automatizavimui.",
-    },
-    {
-        "pavadinimas": "Tvarumas ir antrinis naudojimas",
-        "aprasymas": "Vartotojai renkasi produktus su mažesniu poveikiu aplinkai ir aiškia kilmės istorija.",
-    },
-    {
-        "pavadinimas": "Sveikata ir prevencija namuose",
-        "aprasymas": "Auga susidomėjimas miego, streso ir mitybos stebėsena be dažnų vizitų pas specialistus.",
-    },
-    {
-        "pavadinimas": "Vietinis e. prekybos patogumas",
-        "aprasymas": "Pirkėjai nori greito pristatymo, paprasto grąžinimo ir asmeninių rekomendacijų.",
-    },
-    {
-        "pavadinimas": "Nuotolinis darbas ir hibridinės komandos",
-        "aprasymas": "Mažos komandos ieško paprastų įrankių, kurie pakeistų brangias įmonių sistemas.",
-    },
-    {
-        "pavadinimas": "Mokymasis visą gyvenimą",
-        "aprasymas": "Profesionalai ieško trumpų, praktinių kursų, pritaikytų konkrečiai specialybei.",
-    },
+RSS_FEEDS = [
+    "https://techcrunch.com/category/artificial-intelligence/feed/",
+    "https://venturebeat.com/category/ai/feed/",
+    "https://www.artificialintelligence-news.com/feed/",
+    "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
 ]
 
-IDEA_TEMPLATES = [
-    {
-        "pavadinimas": "AI asistentas vietiniams verslams",
-        "santrauka": "Paprasta paslauga, kuri automatiškai atsako į klientų žinutes, sudaro kainos pasiūlymus ir primena apie užsakymus.",
-        "kodel": "Mažos įmonės nori AI naudos, bet neturi laiko ir biudžeto kurti savų sistemų.",
-        "pirmas_zingsnis": "Pasirinkti vieną nišą (pvz. grožio salonai) ir paleisti 5 klientų bandomąją versiją.",
-    },
-    {
-        "pavadinimas": "Tvaraus pakartotinio naudojimo rinka",
-        "santrauka": "Platforma, kurioje gyventojai ir smulkūs gamintojai parduoda atnaujintus daiktus su aiškia būklės informacija.",
-        "kodel": "Antrinė rinka auga, bet pirkėjai vis dar bijo kokybės rizikos.",
-        "pirmas_zingsnis": "Pradėti nuo vienos kategorijos (baldai arba elektronika) ir vietinio miesto.",
-    },
-    {
-        "pavadinimas": "Namų sveikatos ataskaitų rinkinys",
-        "santrauka": "Prenumerata: nešiojamas jutiklis + savaitinė ataskaita su paprastais veiksmais miegui ir energijai gerinti.",
-        "kodel": "Žmonės nori prevencijos, bet nesupranta žalių duomenų iš programėlių.",
-        "pirmas_zingsnis": "Sukurtį PDF ataskaitos šabloną ir išbandyti su 20 pažįstamų.",
-    },
-    {
-        "pavadinimas": "Vietinių parduotuvių greito atsiėmimo tinklas",
-        "santrauka": "Bendras užsakymo langas kelioms kaimynystės parduotuvėms su atsiėmimu per 2 valandas.",
-        "kodel": "Klientai nori greičio kaip didžiosiose platformose, bet palaiko vietinį verslą.",
-        "pirmas_zingsnis": "Surinkti 8 parduotuves viename rajone ir paleisti WhatsApp / paprastą svetainę.",
-    },
-    {
-        "pavadinimas": "Hibridinės komandos „vieno langelio“ įrankis",
-        "santrauka": "Lengva lenta užduotims, sutarčių šablonams ir savaitės ataskaitoms, skirta 3–15 žmonių komandoms.",
-        "kodel": "Didelės sistemos per sudėtingos, o lentelės greitai virsta chaosu.",
-        "pirmas_zingsnis": "Apklausti 10 smulkių agentūrų, kokių 3 funkcijų joms iš tikrųjų reikia.",
-    },
-    {
-        "pavadinimas": "Trumpi praktiniai kursai specialistams",
-        "santrauka": "4 savaičių programos (pvz. buhalteriams, meistrams, restoranams) su namų darbais ir grįžtamuoju ryšiu.",
-        "kodel": "Bendri kursai per platūs; žmonės moka už konkretų rezultatą darbe.",
-        "pirmas_zingsnis": "Paruošti vieną kursą, parduoti jį už išankstinę kainą ir patobulinti pagal atsiliepimus.",
-    },
+DDG_QUERIES = [
+    "AI business news",
+    "artificial intelligence startup funding",
+    "AI small business tools",
 ]
 
 
-def collect_trends(rng: Random) -> list[dict]:
-    """Imituoja viešų šaltinių peržiūrą ir grąžina 3 tendencijas."""
-    return rng.sample(TRENDS, k=3)
+def collect_news(limit: int = NEWS_LIMIT) -> list[dict[str, str]]:
+    """Surenka AI / verslo naujienas iš RSS ir DuckDuckGo."""
+    items: list[dict[str, str]] = []
+    items.extend(_fetch_rss_news())
+    items.extend(_fetch_ddg_news())
+    return _dedupe_news(items)[:limit]
 
 
-def pick_ideas(rng: Random) -> list[dict]:
-    """Parenka 3 verslo idėjas pagal dienos sėklą, kad ataskaita būtų kartojama tą pačią dieną."""
-    return rng.sample(IDEA_TEMPLATES, k=3)
+def _fetch_rss_news() -> list[dict[str, str]]:
+    import feedparser
+
+    items: list[dict[str, str]] = []
+    for url in RSS_FEEDS:
+        try:
+            raw = _http_get(url)
+            feed = feedparser.parse(raw)
+        except Exception as exc:  # noqa: BLE001 – tinklo klaidos neturi nutraukti visos rinkimo
+            print(f"RSS nepavyko ({url}): {exc}")
+            continue
+        for entry in feed.entries[:6]:
+            title = _clean_text(getattr(entry, "title", ""))
+            link = str(getattr(entry, "link", "")).strip()
+            summary = _clean_text(getattr(entry, "summary", "") or getattr(entry, "description", ""))
+            if not title:
+                continue
+            items.append(
+                {
+                    "title": title,
+                    "url": link,
+                    "summary": summary[:400],
+                    "source": "rss",
+                }
+            )
+    return items
 
 
-def build_report(trends: list[dict], ideas: list[dict], generated_at: datetime) -> str:
+def _fetch_ddg_news() -> list[dict[str, str]]:
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        from duckduckgo_search import DDGS  # type: ignore[no-redef]
+
+    items: list[dict[str, str]] = []
+    try:
+        with DDGS() as ddgs:
+            for query in DDG_QUERIES:
+                try:
+                    results = ddgs.news(query, max_results=5)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"DuckDuckGo paieška nepavyko ({query}): {exc}")
+                    continue
+                for row in results or []:
+                    title = _clean_text(str(row.get("title") or ""))
+                    url = str(row.get("url") or row.get("href") or "").strip()
+                    body = _clean_text(str(row.get("body") or row.get("excerpt") or ""))
+                    if not title:
+                        continue
+                    items.append(
+                        {
+                            "title": title,
+                            "url": url,
+                            "summary": body[:400],
+                            "source": "duckduckgo",
+                        }
+                    )
+    except Exception as exc:  # noqa: BLE001
+        print(f"DuckDuckGo paieška nepavyko: {exc}")
+    return items
+
+
+def _http_get(url: str, timeout: int = 20) -> bytes:
+    request = Request(url, headers={"User-Agent": USER_AGENT})
+    with urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def _clean_text(value: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", value or "")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _dedupe_news(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[str] = set()
+    unique: list[dict[str, str]] = []
+    for item in items:
+        key = (item.get("url") or item.get("title") or "").lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def analyze_news(news: list[dict[str, str]], generated_at: datetime) -> str:
+    """AI iš naujienų paruošia trumpą verslo įžvalgų ataskaitą."""
+    headlines = "\n".join(
+        f"- {item['title']}\n  {item['summary']}\n  Šaltinis: {item['url']}"
+        for item in news
+    )
+    system = (
+        "Tu esi verslo analitikas. Rašyk lietuviškai, trumpai ir konkretiai. "
+        "Neduok investavimo ar teisinio patarimo. Remkis tik pateiktomis naujienomis."
+    )
+    user = f"""Šiandienos data: {generated_at.strftime("%Y-%m-%d")}.
+
+Naujienos:
+{headlines}
+
+Paruošk tekstinę ataskaitą su šiomis dalimis:
+1) PASTEBĖTOS TENDENCIJOS – 3–5 punktai, kas keičiasi AI ir versle.
+2) 3 VERSLO IDĖJOS – kiekvienai: pavadinimas, santrauka, kodėl dabar, pirmas žingsnis.
+3) TRUMPA IŠVADA – 2–3 sakiniai, kam tai aktualu smulkiam / vidutiniam verslui.
+
+Nenaudok Markdown žvaigždučių. Rašyk gryną tekstą."""
+
+    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+
+    if openai_key:
+        return _analyze_openai(system, user, openai_key)
+    if anthropic_key:
+        return _analyze_anthropic(system, user, anthropic_key)
+    raise RuntimeError(
+        "Nerastas AI raktas. Nustatykite OPENAI_API_KEY arba ANTHROPIC_API_KEY faile .env"
+    )
+
+
+def _analyze_openai(system: str, user: str, api_key: str) -> str:
+    from openai import OpenAI
+
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+    client = OpenAI(api_key=api_key)
+    response = client.chat.completions.create(
+        model=model,
+        temperature=0.4,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    )
+    content = response.choices[0].message.content
+    if not content:
+        raise RuntimeError("OpenAI grąžino tuščią atsakymą.")
+    return content.strip()
+
+
+def _analyze_anthropic(system: str, user: str, api_key: str) -> str:
+    import anthropic
+
+    model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5").strip() or "claude-sonnet-4-5"
+    client = anthropic.Anthropic(api_key=api_key)
+    response = client.messages.create(
+        model=model,
+        max_tokens=1600,
+        system=system,
+        messages=[{"role": "user", "content": user}],
+    )
+    text_parts = [block.text for block in response.content if getattr(block, "type", "") == "text"]
+    content = "\n".join(text_parts).strip()
+    if not content:
+        raise RuntimeError("Claude grąžino tuščią atsakymą.")
+    return content
+
+
+def build_report(news: list[dict[str, str]], insights: str, generated_at: datetime) -> str:
     lines = [
         "AI VERSLO TENDENCIJŲ AGENTAS",
-        "Tekstinė ataskaita",
+        "Verslo įžvalgų ataskaita",
         f"Sugeneruota: {generated_at.strftime('%Y-%m-%d %H:%M')}",
         "",
-        "Ši ataskaita IMITUOJA tendencijų rinkimą (nėra gyvo interneto skenavimo).",
+        "Naujienos surinktos iš RSS ir DuckDuckGo. Analizė atlikta su AI.",
         "Idėjos skirtos inspiracijai, ne investavimo ar verslo patarimui.",
         "",
         "=" * 60,
-        "PASTEBĖTOS TENDENCIJOS",
+        "ŠALTINIAI",
         "=" * 60,
         "",
     ]
-
-    for index, trend in enumerate(trends, start=1):
-        lines.append(f"{index}. {trend['pavadinimas']}")
-        lines.append(f"   {trend['aprasymas']}")
+    for index, item in enumerate(news, start=1):
+        lines.append(f"{index}. {item['title']}")
+        if item.get("url"):
+            lines.append(f"   {item['url']}")
         lines.append("")
-
     lines.extend(
         [
             "=" * 60,
-            "3 VERSLO IDĖJOS",
+            "AI ĮŽVALGOS",
             "=" * 60,
+            "",
+            insights.strip(),
+            "",
+            "Pabaiga.",
             "",
         ]
     )
+    return "\n".join(lines)
 
-    for index, idea in enumerate(ideas, start=1):
-        lines.append(f"{index}. {idea['pavadinimas']}")
-        lines.append(f"   Santrauka: {idea['santrauka']}")
-        lines.append(f"   Kodėl dabar: {idea['kodel']}")
-        lines.append(f"   Pirmas žingsnis: {idea['pirmas_zingsnis']}")
-        lines.append("")
 
-    lines.append("Pabaiga.")
-    return "\n".join(lines) + "\n"
+def send_report_email(report: str) -> bool:
+    """Išsiunčia ataskaitą el. paštu, jei sukonfigūruotas SMTP."""
+    to_addr = os.getenv("EMAIL_TO", "").strip()
+    host = os.getenv("SMTP_HOST", "").strip()
+    user = os.getenv("SMTP_USER", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "").strip()
+    from_addr = os.getenv("EMAIL_FROM", "").strip() or user
+    if not to_addr or not host or not from_addr:
+        print("El. paštas praleistas: trūksta EMAIL_TO, SMTP_HOST arba EMAIL_FROM.")
+        return False
+
+    port = int(os.getenv("SMTP_PORT", "587") or "587")
+    subject = os.getenv("EMAIL_SUBJECT", "AI verslo tendencijų ataskaita").strip()
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = from_addr
+    message["To"] = to_addr
+    message.set_content(report)
+
+    with smtplib.SMTP(host, port, timeout=30) as smtp:
+        smtp.ehlo()
+        smtp.starttls()
+        smtp.ehlo()
+        if user and password:
+            smtp.login(user, password)
+        smtp.send_message(message)
+    print(f"Ataskaita išsiųsta: {to_addr}")
+    return True
 
 
 def main() -> None:
+    load_dotenv()
     generated_at = datetime.now()
-    rng = Random(generated_at.strftime("%Y-%m-%d"))
-    trends = collect_trends(rng)
-    ideas = pick_ideas(rng)
-    report = build_report(trends, ideas, generated_at)
+    print("Renkamos AI verslo naujienos...")
+    news = collect_news()
+    if not news:
+        raise RuntimeError("Nepavyko surinkti naujienų iš RSS ar DuckDuckGo.")
+
+    print(f"Surinkta naujienų: {len(news)}. Analizuojama su AI...")
+    insights = analyze_news(news, generated_at)
+    report = build_report(news, insights, generated_at)
     OUTPUT_FILE.write_text(report, encoding="utf-8")
     print(f"Ataskaita įrašyta: {OUTPUT_FILE}")
     print(report)
+
+    try:
+        send_report_email(report)
+    except Exception as exc:  # noqa: BLE001
+        print(f"El. pašto siuntimas nepavyko: {exc}")
 
 
 if __name__ == "__main__":
