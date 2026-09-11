@@ -5,23 +5,23 @@ from email.mime.multipart import MIMEMultipart
 from duckduckgo_search import DDGS
 
 def ieskoti_naujienu():
-    ddgs = DDGS()
-    query = 'artificial intelligence business trends'
     rezultatai = []
     try:
-        results = ddgs.news(keywords=query, region='wt-wt', max_results=5)
-        for r in results:
-            rezultatai.append({
-                'title': r.get('title', ''),
-                'link': r.get('url', ''),
-                'snippet': r.get('body', '')
-            })
+        ddgs = DDGS()
+        # Naudojame paprastą text paiešką su naujienų raktažodžiais, kad išvengtume API lūžimų
+        results = ddgs.text(keywords='artificial intelligence business news', region='wt-wt', max_results=5)
+        if results:
+            for r in results:
+                rezultatai.append({
+                    'title': r.get('title', ''),
+                    'link': r.get('href', ''),
+                    'snippet': r.get('body', '')
+                })
     except Exception as e:
         print(f"Naujienų paieškos klaida: {e}")
     return rezultatai
 
 def ieskoti_darbu():
-    ddgs = DDGS()
     queries = [
         'site:cvbankas.lt "Palanga" "pusė etato" -valytojas -valytoja -valymas',
         'site:cvonline.lt "Palanga" "pusė etato" -valytojas -valytoja -valymas',
@@ -34,26 +34,31 @@ def ieskoti_darbu():
     matytos_nuorodos = set()
     draudziami_zodziai = ['valytoj', 'valym', 'cleaner', 'tvarkytoj']
 
-    for q in queries:
-        try:
-            results = ddgs.text(keywords=q, region='lt-lt', max_results=4)
-            for r in results:
-                link = r.get('href', '')
-                title = r.get('title', '')
-                body = r.get('body', '')
-                
-                tekstas_patikrinimui = (title + " " + body).lower()
-                ar_yra_draudziamu = any(zodis in tekstas_patikrinimui for zodis in draudziami_zodziai)
+    try:
+        ddgs = DDGS()
+        for q in queries:
+            try:
+                results = ddgs.text(keywords=q, region='lt-lt', max_results=4)
+                if results:
+                    for r in results:
+                        link = r.get('href', '')
+                        title = r.get('title', '')
+                        body = r.get('body', '')
+                        
+                        tekstas_patikrinimui = (title + " " + body).lower()
+                        ar_yra_draudziamu = any(zodis in tekstas_patikrinimui for zodis in draudziami_zodziai)
 
-                if link and link not in matytos_nuorodos and not ar_yra_draudziamu:
-                    matytos_nuorodos.add(link)
-                    rezultatai.append({
-                        'title': title,
-                        'link': link,
-                        'snippet': body
-                    })
-        except Exception as e:
-            print(f"Darbo paieškos klaida su užklausa '{q}': {e}")
+                        if link and link not in matytos_nuorodos and not ar_yra_draudziamu:
+                            matytos_nuorodos.add(link)
+                            rezultatai.append({
+                                'title': title,
+                                'link': link,
+                                'snippet': body
+                            })
+            except Exception as e:
+                print(f"Klaida vykdant užklausą '{q}': {e}")
+    except Exception as e:
+        print(f"Bendroji darbo paieškos klaida: {e}")
             
     return rezultatai
 
