@@ -1,77 +1,86 @@
-import sys
 import os
-import urllib.request
-import xml.etree.ElementTree as ET
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from duckduckgo_search import DDGS
 
-def fetch_ai_news():
-    """Surenka naujausias AI verslo naujienas iš Google News RSS."""
-    url = "https://news.google.com/rss/search?q=artificial+intelligence+business&hl=en-US&gl=US&ceid=US:en"
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+def ieskoti_darbu():
+    ddgs = DDGS()
     
-    try:
-        with urllib.request.urlopen(req) as response:
-            xml_data = response.read()
-        
-        root = ET.fromstring(xml_data)
-        items = root.findall('.//item')[:5]
-        
-        news_list = []
-        for item in items:
-            title = item.find('title').text
-            link = item.find('link').text
-            news_list.append(f"- {title}\n  Nuoroda: {link}")
+    # Paieškos užklausos, orientuotos į aptarnavimą, pardavimus ir pagalbinius darbus (be valytojų)
+    queries = [
+        'site:cvbankas.lt "Palanga" "pusė etato" -valytojas -valytoja -valymas',
+        'site:cvonline.lt "Palanga" "pusė etato" -valytojas -valytoja -valymas',
+        'site:cvmarket.lt "Palanga" "pusė etato" -valytojas -valytoja -valymas',
+        'site:skelbiu.lt/skelbimai/darbas "Palanga" "pusė etato" -valytojas -valytoja -valymas',
+        'site:linkedin.com/jobs "Palanga" "part-time" -cleaner'
+    ]
+    
+    rezultatai = []
+    matytos_nuorodos = set()
+    draudziami_zodziai = ['valytoj', 'valym', 'cleaner', 'tvarkytoj']
+
+    for q in queries:
+        try:
+            results = ddgs.text(keywords=q, region='lt-lt', max_results=5)
+            for r in results:
+                link = r.get('href', '')
+                title = r.get('title', '')
+                body = r.get('body', '')
+                
+                # Papildomas patikrinimas, kad tikrai nepatektų valymo darbai
+                tekstas_patikrinimui = (title + " " + body).lower()
+                ar_yra_draudziamu = any(zodis in tekstas_patikrinimui for zodis in draudziami_zodziai)
+
+                if link and link not in matytos_nuorodos and not ar_yra_draudziamu:
+                    matytos_nuorodos.add(link)
+                    rezultatai.append({
+                        'title': title,
+                        'link': link,
+                        'snippet': body
+                    })
+        except Exception as e:
+            print(f"Paieškos klaida su užklausa '{q}': {e}")
             
-        return news_list
-    except Exception as e:
-        print(f"Klaida renkant naujienas: {e}")
-        return ["- Nepavyko užkrauti naujienų."]
+    return rezultatai
 
-def generate_report(news):
-    """Sugeneruoja verslo ataskaitą."""
-    content = "=== KASDIENĖ AI VERSLO TENDENCIJŲ ATASKAITA ===\n\n"
-    content += "Naujausios rasto AI naujienos ir tendencijos:\n\n"
-    content += "\n\n".join(news)
-    content += "\n\n--- Ataskaitą automatiškai sugeneravo AI Agentas ---"
-    return content
+def siusti_laiska(darbai):
+    email_user = os.environ.get("EMAIL_USER")
+    email_password = os.environ.get("EMAIL_PASSWORD")
+    email_to = os.environ.get("EMAIL_TO")
 
-def send_email(subject, body):
-    """Išsiunčia ataskaitą el. paštu jei suvesti kintamieji."""
-    sender_email = os.getenv("EMAIL_USER")
-    sender_password = os.getenv("EMAIL_PASSWORD")
-    recipient_email = os.getenv("EMAIL_TO")
-
-    if not sender_email or not sender_password or not recipient_email:
-        print("Pastaba: El. pašto parametrai dar nenustatyti. Laiškas nebus siunčiamas.")
+    if not email_user or not email_password or not email_to:
+        print("Trūksta el. pašto kintamųjų (Secrets).")
         return
 
-    msg = MIMEMultipart()
-    msg['From'] = sender_email
-    msg['To'] = recipient_email
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain', 'utf-8'))
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = f"Darbo skelbimai Palangoje (Pusė etato)"
+    msg['From'] = email_user
+    msg['To'] = email_to
+
+    if not darbai:
+        html_body = "<h3>Šiandien naujų pusės etato skelbimų Palangoje (išskyrus valymo darbus) nerasta.</h3>"
+    else:
+        html_body = "<h2>Naujausi pusės etato darbo skelbimai Palangoje:</h2><ul>"
+        for d in darbai:
+            html_body += f"""
+            <li style="margin-bottom: 15px;">
+                <a href="{d['link']}" style="font-weight: bold; font-size: 16px; color: #1a73e8;">{d['title']}</a><br>
+                <span style="color: #555;">{d['snippet']}</span>
+            </li>
+            """
+        html_body += "</ul>"
+
+    msg.attach(MIMEText(html_body, 'html'))
 
     try:
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(sender_email, sender_password)
-            server.send_message(msg)
-        print("Ataskaita sėkmingai išsiūsta el. paštu!")
+            server.login(email_user, email_password)
+            server.sendmail(email_user, email_to, msg.as_string())
+        print("Laiškas sėkmingai išsiųstas!")
     except Exception as e:
-        print(f"Klaida siunčiant el. laišką: {e}")
+        print(f"Klaida siunčiant laišką: {e}")
 
 if __name__ == "__main__":
-    print("Agentas pradeda darbą...")
-    news = fetch_ai_news()
-    report = generate_report(news)
-    
-    # Išsaugome į failą
-    with open("business_ideas.txt", "w", encoding="utf-8") as f:
-        f.write(report)
-    
-    print("\n" + report + "\n")
-    
-    # Bandome siųsti el. paštu
-    send_email("Kasdienė AI Verslo Ataskaita", report)
-    print("Darbas sėkmingai baigtas!")
+    rasti_darbai = ieskoti_darbu()
+    siusti_laiska(rasti_darbai)
